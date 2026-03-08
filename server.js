@@ -16,7 +16,7 @@ app.get("/pay", (req, res) => {
   res.json({
     chainId: 8453,
     to: "0xeE9E4BF09bf3CAB442EB0aD5730caE511F76BF1B",
-    value: "0x0", // replace with real price later
+    value: "0x0",
     productId:
       "0x47524f5550434841545f4541524c590000000000000000000000000000000000",
     ref
@@ -81,32 +81,73 @@ app.get("/verify", async (req, res) => {
   }
 });
 
+// --------------------------------------------
+// Telegram Webhook
+// --------------------------------------------
+app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => {
+  console.log("Telegram update received:", req.body);
 
-> baba-pay-api@1.0.0 start
-> node server.js
-Server running on port 10000
-==> Your service is live 🎉
-==> 
-==> ///////////////////////////////////////////////////////////
-==> 
-==> Available at your primary URL https://baba-pay-api.onrender.com
-==> 
-==> ///////////////////////////////////////////////////////////
-Telegram update received: {
-  update_id: 247139722,
-  message: {
-    message_id: 307,
-    from: {
-      id: 8135935257,
-      is_bot: false,
-      first_name: 'Adeayomi',
-      language_code: 'en'
-    },
-    chat: { id: 8135935257, first_name: 'Adeayomi', type: 'private' },
-    date: 1772995747,
-    text: '0x123'
+  const msg = req.body.message;
+  if (!msg || !msg.text) return res.sendStatus(200);
+
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
+
+  const isTxHash = /^0x[a-fA-F0-9]{64}$/.test(text);
+
+  if (!isTxHash) {
+    await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "Send your Base transaction hash to unlock access."
+      })
+    });
+    return res.sendStatus(200);
   }
-}
+
+  const verifyUrl = `https://baba-pay-api.onrender.com/verify?txHash=${text}`;
+
+  let result;
+  try {
+    result = await fetch(verifyUrl).then((r) => r.json());
+  } catch (err) {
+    console.error("Verify error:", err);
+    await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "⚠️ Verification server error. Try again shortly."
+      })
+    });
+    return res.sendStatus(200);
+  }
+
+  if (!result.ok) {
+    await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `❌ ${result.error || "Transaction invalid"}`
+      })
+    });
+    return res.sendStatus(200);
+  }
+
+  await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: "✅ Transaction verified!\n\nWelcome to the group. Here is your access link:\n\n<YOUR_GROUP_LINK>"
+    })
+  });
+
+  res.sendStatus(200);
+});
 
 // -----------------------------
 // Start server
