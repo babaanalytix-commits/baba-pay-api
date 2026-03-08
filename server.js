@@ -15,7 +15,7 @@ app.get("/pay", (req, res) => {
 
   res.json({
     chainId: 8453,
-    to: "0xeE9E4BF09bf3CAB442EB0aD5730caE511F76BF1B",
+    to: "0x2AFE5FFe043C1c45843076E65BF93517d37d1Ed7",
     value: "0x0",
     productId:
       "0x47524f5550434841545f4541524c590000000000000000000000000000000000",
