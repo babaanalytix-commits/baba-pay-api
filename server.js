@@ -81,43 +81,32 @@ app.get("/verify", async (req, res) => {
   }
 });
 
-// --------------------------------------------
-// Telegram Webhook
-// --------------------------------------------
-app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => {
-  console.log("Telegram update received:", req.body);
 
-  const msg = req.body.message;
-  if (!msg || !msg.text) return res.sendStatus(200);
-
-  const chatId = msg.chat.id;
-  const text = msg.text.trim();
-
-  // If user sends a 66‑char hex string starting with 0x → treat as tx hash
-  if (/^0x[a-fA-F0-9]{64}$/.test(text)) {
-    await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: "❌ Transaction not found"
-      })
-    });
-    return res.sendStatus(200);
+> baba-pay-api@1.0.0 start
+> node server.js
+Server running on port 10000
+==> Your service is live 🎉
+==> 
+==> ///////////////////////////////////////////////////////////
+==> 
+==> Available at your primary URL https://baba-pay-api.onrender.com
+==> 
+==> ///////////////////////////////////////////////////////////
+Telegram update received: {
+  update_id: 247139722,
+  message: {
+    message_id: 307,
+    from: {
+      id: 8135935257,
+      is_bot: false,
+      first_name: 'Adeayomi',
+      language_code: 'en'
+    },
+    chat: { id: 8135935257, first_name: 'Adeayomi', type: 'private' },
+    date: 1772995747,
+    text: '0x123'
   }
-
-  // Default reply
-  await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: "Send your Base transaction hash to unlock access."
-    })
-  });
-
-  res.sendStatus(200);
-});
+}
 
 // -----------------------------
 // Start server
