@@ -59,7 +59,7 @@ app.get("/verify", async (req, res) => {
 
     if (
       t.to.toLowerCase() !==
-      "0xee9e4bf09bf3cab442eb0ad5730cae511f76bf1b".toLowerCase()
+      "0x2afe5ffe043c1c45843076e65bf93517d37d1ed7".toLowerCase()
     ) {
       return res.status(400).json({ ok: false, error: "Wrong recipient" });
     }
