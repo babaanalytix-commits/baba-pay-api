@@ -3,7 +3,6 @@ import express from "express";
 const app = express();
 app.use(express.json());
 
-
 // -----------------------------
 // /pay  → returns payment intent
 // -----------------------------
@@ -35,10 +34,8 @@ app.get("/verify", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing txHash" });
     }
 
-    // Base mainnet RPC
     const rpc = "https://mainnet.base.org";
 
-    // Fetch transaction
     const tx = await fetch(rpc, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -56,12 +53,10 @@ app.get("/verify", async (req, res) => {
 
     const t = tx.result;
 
-    // Validate chain
     if (t.chainId !== "0x2105") {
       return res.status(400).json({ ok: false, error: "Wrong chain" });
     }
 
-    // Validate recipient
     if (
       t.to.toLowerCase() !==
       "0xee9e4bf09bf3cab442eb0ad5730cae511f76bf1b".toLowerCase()
@@ -69,12 +64,10 @@ app.get("/verify", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Wrong recipient" });
     }
 
-    // Decode calldata
     const data = t.input;
 
-    // First 4 bytes = selector → skip "0x" + 8 chars = 10 chars
-    const productId = data.slice(10, 74); // 32 bytes
-    const ref = data.slice(74, 138); // next 32 bytes
+    const productId = data.slice(10, 74);
+    const ref = data.slice(74, 138);
 
     return res.json({
       ok: true,
@@ -88,11 +81,6 @@ app.get("/verify", async (req, res) => {
   }
 });
 
-// -----------------------------
-// Start server
-// -----------------------------
-const port = process.env.PORT;
-
 // --------------------------------------------
 // Telegram Webhook
 // --------------------------------------------
@@ -105,7 +93,7 @@ app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => 
   const chatId = msg.chat.id;
   const text = msg.text.trim();
 
-  // Simple test response
+  // If user sends a 66‑char hex string starting with 0x → treat as tx hash
   if (/^0x[a-fA-F0-9]{64}$/.test(text)) {
     await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
       method: "POST",
@@ -131,6 +119,10 @@ app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => 
   res.sendStatus(200);
 });
 
+// -----------------------------
+// Start server
+// -----------------------------
+const port = process.env.PORT;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
