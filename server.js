@@ -195,7 +195,7 @@ app.get("/checkout", async (req, res) => {
 
   <h2>BABA Analytics – Group Chat Subscription</h2>
   <p>
-    Access the private BABA Analytics Group Chat where Yomi shares:
+    Access the private BABA Analytics Group Chat where members shares:
   </p>
   <ul>
     <li>Daily market structure insights</li>
@@ -245,6 +245,7 @@ async function fetchPricing() {
 document.getElementById("walletInput").addEventListener("input", fetchPricing);
 fetchPricing();
 
+
 async function payWithWallet() {
   const wallet = document.getElementById("walletInput").value.trim();
   if (!wallet.startsWith("0x") || wallet.length !== 42) {
@@ -262,14 +263,18 @@ async function payWithWallet() {
     return;
   }
 
-  const tx = {
-    from: wallet,
-    to: payData.to,
-    data: payData.data,
-    value: "0x0"
-  };
-
   try {
+    // 1. Connect wallet first
+    await window.ethereum.request({ method: "eth_requestAccounts" });
+
+    // 2. Then send the USDC transfer
+    const tx = {
+      from: wallet,
+      to: payData.to,
+      data: payData.data,
+      value: "0x0"
+    };
+
     const txHash = await window.ethereum.request({
       method: "eth_sendTransaction",
       params: [tx]
@@ -281,6 +286,7 @@ async function payWithWallet() {
     alert("Payment failed: " + err.message);
   }
 }
+
 </script>
 
 </body>
