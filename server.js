@@ -37,7 +37,7 @@ const app = express();
 app.use(express.json());
 
 // -----------------------------
-// /pay → pricing + USDC calldata
+// /pay → pricing + USDC calldata (API)
 // -----------------------------
 app.get("/pay", (req, res) => {
   const { product, ref = "", wallet, telegramId } = req.query;
@@ -48,7 +48,7 @@ app.get("/pay", (req, res) => {
 
   // Identify user
   let userKey = null;
-  if (wallet) userKey = wallet.toLowerCase();
+  if (wallet) userKey = String(wallet).toLowerCase();
   else if (telegramId) userKey = `tg_${telegramId}`;
   else return res.status(400).json({ error: "Missing user identifier" });
 
@@ -57,7 +57,7 @@ app.get("/pay", (req, res) => {
 
   if (!user) {
     user = {
-      wallet: wallet ? wallet.toLowerCase() : null,
+      wallet: wallet ? String(wallet).toLowerCase() : null,
       telegramId: telegramId ? Number(telegramId) : null,
       referralCredits: 0,
       isEarlyContributor: false,
@@ -66,9 +66,7 @@ app.get("/pay", (req, res) => {
     users[userKey] = user;
   }
 
-  // -----------------------------
   // Pricing logic
-  // -----------------------------
   const basePrice = 24.99;
   let price = basePrice;
   let discountReason = null;
@@ -102,11 +100,8 @@ app.get("/pay", (req, res) => {
   // Convert price → USDC units (6 decimals)
   const amountUnits = Math.round(price * 1e6);
   const amountHex = amountUnits.toString(16).padStart(64, "0");
-
-  // Treasury padded
   const treasuryPadded = TREASURY.replace("0x", "").padStart(64, "0");
 
-  // ERC‑20 transfer calldata
   const data = TRANSFER_SELECTOR + treasuryPadded + amountHex;
 
   res.json({
@@ -123,6 +118,133 @@ app.get("/pay", (req, res) => {
       "0x47524f5550434841545f4541524c590000000000000000000000000000000000",
     ref
   });
+});
+
+// --------------------------------------------
+// /checkout → Human-friendly payment page
+// --------------------------------------------
+app.get("/checkout", async (req, res) => {
+  const { product, wallet = "", ref = "" } = req.query;
+
+  if (!product) return res.send("Missing product");
+
+  const safeWallet = String(wallet || "").trim();
+
+  const payUrl = `${req.protocol}://${req.get("host")}/pay?product=${product}${
+    safeWallet ? `&wallet=${safeWallet}` : ""
+  }${ref ? `&ref=${ref}` : ""}`;
+
+  const pay = await fetch(payUrl).then((r) => r.json());
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>BABA Checkout</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      max-width: 420px;
+      margin: 40px auto;
+      padding: 20px;
+      color: #111;
+    }
+    .card {
+      border: 1px solid #ddd;
+      padding: 24px;
+      border-radius: 14px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+    }
+    .price {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .discount {
+      color: #0a8f3c;
+      margin-bottom: 20px;
+      font-size: 15px;
+    }
+    button {
+      background: black;
+      color: white;
+      padding: 14px;
+      width: 100%;
+      border: none;
+      border-radius: 8px;
+      font-size: 17px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    label {
+      font-size: 14px;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>BABA Analytics Subscription</h2>
+
+  <div class="card">
+    <div class="price">$${pay.priceUSD} USDC</div>
+    <div class="discount">${pay.discountReason || ""}</div>
+
+    <label>Your Base Wallet</label>
+    <input id="walletInput" value="${safeWallet}" placeholder="0x..." />
+
+    <button onclick="payWithWallet()">Pay with Wallet</button>
+  </div>
+
+<script>
+async function payWithWallet() {
+  const wallet = document.getElementById("walletInput").value.trim();
+  if (!wallet.startsWith("0x") || wallet.length !== 42) {
+    alert("Please enter a valid Base wallet address.");
+    return;
+  }
+
+  if (!window.ethereum) {
+    alert("No wallet detected. Install MetaMask or Coinbase Wallet.");
+    return;
+  }
+
+  const tx = {
+    from: wallet,
+    to: "${pay.to}",
+    data: "${pay.data}",
+    value: "0x0"
+  };
+
+  try {
+    const txHash = await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [tx]
+    });
+
+    // After sending, send user to Telegram group (they'll paste tx hash there)
+    window.location.href = "https://t.me/BABAANALYTIC";
+  } catch (err) {
+    console.error(err);
+    alert("Payment failed: " + (err && err.message ? err.message : err));
+  }
+}
+</script>
+
+</body>
+</html>
+  `;
+
+  res.send(html);
 });
 
 // -----------------------------
@@ -145,7 +267,7 @@ app.get("/verify", async (req, res) => {
         method: "eth_getTransactionByHash",
         params: [txHash]
       })
-    }).then(r => r.json());
+    }).then((r) => r.json());
 
     if (!tx.result) return res.status(404).json({ ok: false, error: "Transaction not found" });
 
@@ -166,7 +288,7 @@ app.get("/verify", async (req, res) => {
         method: "eth_getTransactionReceipt",
         params: [txHash]
       })
-    }).then(r => r.json());
+    }).then((r) => r.json());
 
     if (!receipt.result) {
       return res.status(400).json({ ok: false, error: "Receipt not found" });
@@ -196,9 +318,7 @@ app.get("/verify", async (req, res) => {
       return res.status(400).json({ ok: false, error: "No valid USDC transfer found" });
     }
 
-    // -----------------------------
     // Subscription lifecycle
-    // -----------------------------
     const users = loadUsers();
     let user = users[from] || {
       wallet: from,
@@ -221,11 +341,9 @@ app.get("/verify", async (req, res) => {
 
     user.subscriptionExpires = newExpiry.toISOString();
 
-    // -----------------------------
     // Referral crediting
-    // -----------------------------
-    const data = t.input;
-    const refRaw = data.slice(74, 138);
+    const data = t.input || "0x";
+    const refRaw = data.length >= 138 ? data.slice(74, 138) : null;
     let refAddress = null;
 
     if (refRaw && refRaw !== "".padStart(64, "0")) {
@@ -254,16 +372,15 @@ app.get("/verify", async (req, res) => {
       subscriptionExpires: user.subscriptionExpires,
       ref: refAddress
     });
-
   } catch (err) {
     console.error(err);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
-// -----------------------------
+// --------------------------------------------
 // Telegram Webhook
-// -----------------------------
+// --------------------------------------------
 app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => {
   const msg = req.body.message;
   if (!msg || !msg.text) return res.sendStatus(200);
@@ -271,58 +388,61 @@ app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => 
   const chatId = msg.chat.id;
   const text = msg.text.trim();
 
-  // -----------------------------
-  // /status command
-  // -----------------------------
+  // /status
   if (text === "/status") {
     const users = loadUsers();
-    let user = Object.values(users).find(u => u.telegramId === chatId);
+    let user = Object.values(users).find((u) => u.telegramId === chatId);
 
     if (!user) {
-      await send(chatId, "ℹ️ You don't have an active subscription yet.\n\nSubscribe here:\nhttps://baba-pay-api.onrender.com/pay?product=GROUPCHAT_EARLY");
+      await sendTelegram(
+        chatId,
+        "ℹ️ You don't have an active subscription yet.\n\nSubscribe here:\nhttps://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY"
+      );
       return res.sendStatus(200);
     }
 
     const expiry = user.subscriptionExpires
-      ? new Date(user.subscriptionExpires).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+      ? new Date(user.subscriptionExpires).toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric"
+        })
       : "No active subscription";
 
     const referralLink = user.wallet
-      ? `https://baba-pay-api.onrender.com/pay?product=GROUPCHAT_EARLY&ref=${user.wallet}`
+      ? `https://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY&ref=${user.wallet}`
       : "No wallet linked";
 
     const early = user.isEarlyContributor ? "Yes (lifetime 50% off)" : "No";
 
-    await send(chatId,
+    await sendTelegram(
+      chatId,
       `📊 *Your Subscription Status*\n\n` +
-      `🗓 *Expires:* ${expiry}\n` +
-      `💎 *Early Contributor:* ${early}\n` +
-      `🎁 *Referral Credits:* ${user.referralCredits}\n\n` +
-      `🔗 *Your Referral Link:*\n${referralLink}`,
+        `🗓 *Expires:* ${expiry}\n` +
+        `💎 *Early Contributor:* ${early}\n` +
+        `🎁 *Referral Credits:* ${user.referralCredits}\n\n` +
+        `🔗 *Your Referral Link:*\n${referralLink}`,
       true
     );
 
     return res.sendStatus(200);
   }
 
-  // -----------------------------
-  // Transaction hash flow
-  // -----------------------------
+  // Tx hash flow
   const isTxHash = /^0x[a-fA-F0-9]{64}$/.test(text);
   if (!isTxHash) {
-    await send(chatId, "Send your Base transaction hash to unlock access.");
+    await sendTelegram(chatId, "Send your Base transaction hash to unlock access.");
     return res.sendStatus(200);
   }
 
   const verifyUrl = `https://baba-pay-api.onrender.com/verify?txHash=${text}`;
-  let result = await fetch(verifyUrl).then(r => r.json());
+  const result = await fetch(verifyUrl).then((r) => r.json());
 
   if (!result.ok) {
-    await send(chatId, `❌ ${result.error || "Transaction invalid"}`);
+    await sendTelegram(chatId, `❌ ${result.error || "Transaction invalid"}`);
     return res.sendStatus(200);
   }
 
-  // Link Telegram to wallet
   const users = loadUsers();
   let user = users[result.from] || {
     wallet: result.from,
@@ -341,15 +461,15 @@ app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => 
     day: "numeric"
   });
 
-  const referralLink = `https://baba-pay-api.onrender.com/pay?product=GROUPCHAT_EARLY&ref=${result.from}`;
+  const referralLink = `https://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY&ref=${result.from}`;
 
-  await send(
+  await sendTelegram(
     chatId,
     `🎉 *Subscription Activated!*\n\n` +
-    `Your access is active until *${expiryStr}*.\n\n` +
-    `🔗 *Group Access Link:*\nhttps://t.me/BABAANALYTIC\n\n` +
-    `💡 *Earn 50% off next month for each friend you invite!*\n` +
-    `Share your referral link:\n${referralLink}`,
+      `Your access is active until *${expiryStr}*.\n\n` +
+      `🔗 *Group Access Link:*\nhttps://t.me/BABAANALYTIC\n\n` +
+      `💡 *Earn 50% off next month for each friend you invite!*\n` +
+      `Share your referral link:\n${referralLink}`,
     true
   );
 
@@ -359,7 +479,7 @@ app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => 
 // -----------------------------
 // Helper: Telegram send
 // -----------------------------
-async function send(chatId, text, markdown = false) {
+async function sendTelegram(chatId, text, markdown = false) {
   await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -375,4 +495,6 @@ async function send(chatId, text, markdown = false) {
 // Start server
 // -----------------------------
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server running on port ${port}`));
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
