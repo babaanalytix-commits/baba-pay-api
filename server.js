@@ -1,41 +1,141 @@
 import express from "express";
+import fs from "fs";
+import path from "path";
 
+// -----------------------------
+// Constants
+// -----------------------------
+const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913".toLowerCase();
+const TREASURY = "0x2AFE5FFe043C1c45843076E65BF93517d37d1Ed7".toLowerCase();
+const TRANSFER_SELECTOR = "0xa9059cbb"; // transfer(address,uint256)
+const TRANSFER_TOPIC =
+  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"; // keccak256("Transfer(address,address,uint256)")
+
+// -----------------------------
+// User storage
+// -----------------------------
+const USERS_FILE = path.join(process.cwd(), "data", "users.json");
+
+function loadUsers() {
+  try {
+    const raw = fs.readFileSync(USERS_FILE, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function saveUsers(users) {
+  fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+}
+
+// -----------------------------
+// Express app
+// -----------------------------
 const app = express();
 app.use(express.json());
 
 // -----------------------------
-// /pay  → returns payment intent
+// /pay → pricing + USDC calldata
 // -----------------------------
 app.get("/pay", (req, res) => {
-  const { product, ref = "" } = req.query;
+  const { product, ref = "", wallet, telegramId } = req.query;
 
   if (product !== "GROUPCHAT_EARLY") {
     return res.status(400).json({ error: "Unknown product" });
   }
 
+  // Identify user
+  let userKey = null;
+  if (wallet) userKey = wallet.toLowerCase();
+  else if (telegramId) userKey = `tg_${telegramId}`;
+  else return res.status(400).json({ error: "Missing user identifier" });
+
+  const users = loadUsers();
+  let user = users[userKey];
+
+  if (!user) {
+    user = {
+      wallet: wallet ? wallet.toLowerCase() : null,
+      telegramId: telegramId ? Number(telegramId) : null,
+      referralCredits: 0,
+      isEarlyContributor: false,
+      subscriptionExpires: null
+    };
+    users[userKey] = user;
+  }
+
+  // -----------------------------
+  // Pricing logic
+  // -----------------------------
+  const basePrice = 24.99;
+  let price = basePrice;
+  let discountReason = null;
+  let discountPercent = "0%";
+
+  const now = new Date();
+  const earlyBirdDeadline = new Date("2026-03-14T23:59:59Z");
+
+  if (now < earlyBirdDeadline) {
+    price = 12.49;
+    discountReason = "Early bird discount (50%)";
+    discountPercent = "50%";
+  }
+
+  if (user.isEarlyContributor) {
+    price = 12.49;
+    discountReason = "Early contributor (lifetime 50%)";
+    discountPercent = "50%";
+  }
+
+  if (user.referralCredits > 0) {
+    price = 12.49;
+    discountReason = "Referral credit (50% off this month)";
+    discountPercent = "50%";
+    user.referralCredits -= 1;
+  }
+
+  users[userKey] = user;
+  saveUsers(users);
+
+  // Convert price → USDC units (6 decimals)
+  const amountUnits = Math.round(price * 1e6);
+  const amountHex = amountUnits.toString(16).padStart(64, "0");
+
+  // Treasury padded
+  const treasuryPadded = TREASURY.replace("0x", "").padStart(64, "0");
+
+  // ERC‑20 transfer calldata
+  const data = TRANSFER_SELECTOR + treasuryPadded + amountHex;
+
   res.json({
+    priceUSD: price.toFixed(2),
+    discount: discountPercent,
+    discountReason,
+    referralCreditsRemaining: user.referralCredits,
+    isEarlyContributor: user.isEarlyContributor,
     chainId: 8453,
-    to: "0x2AFE5FFe043C1c45843076E65BF93517d37d1Ed7",
+    to: USDC,
     value: "0x0",
+    data,
     productId:
       "0x47524f5550434841545f4541524c590000000000000000000000000000000000",
     ref
   });
 });
 
-// --------------------------------------------
-// /verify  → checks a Base transaction by hash
-// --------------------------------------------
+// -----------------------------
+// /verify → USDC Transfer log verification
+// -----------------------------
 app.get("/verify", async (req, res) => {
   try {
     const { txHash } = req.query;
-
-    if (!txHash) {
-      return res.status(400).json({ ok: false, error: "Missing txHash" });
-    }
+    if (!txHash) return res.status(400).json({ ok: false, error: "Missing txHash" });
 
     const rpc = "https://mainnet.base.org";
 
+    // Fetch transaction
     const tx = await fetch(rpc, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -45,117 +145,234 @@ app.get("/verify", async (req, res) => {
         method: "eth_getTransactionByHash",
         params: [txHash]
       })
-    }).then((r) => r.json());
+    }).then(r => r.json());
 
-    if (!tx.result) {
-      return res.status(404).json({ ok: false, error: "Transaction not found" });
-    }
+    if (!tx.result) return res.status(404).json({ ok: false, error: "Transaction not found" });
 
     const t = tx.result;
 
-    // Validate chain
-    if (t.chainId !== "0x2105") {
-      return res.status(400).json({ ok: false, error: "Wrong chain" });
+    // Must be sent to USDC contract
+    if (!t.to || t.to.toLowerCase() !== USDC) {
+      return res.status(400).json({ ok: false, error: "Not a USDC transfer" });
     }
 
-    // Validate recipient
-    if (
-      t.to.toLowerCase() !==
-      "0x2afe5ffe043c1c45843076e65bf93517d37d1ed7"
-    ) {
-      return res.status(400).json({ ok: false, error: "Wrong recipient" });
+    // Fetch receipt for logs
+    const receipt = await fetch(rpc, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "eth_getTransactionReceipt",
+        params: [txHash]
+      })
+    }).then(r => r.json());
+
+    if (!receipt.result) {
+      return res.status(400).json({ ok: false, error: "Receipt not found" });
     }
 
-    // Decode calldata
+    const logs = receipt.result.logs || [];
+    const from = t.from.toLowerCase();
+
+    // Find Transfer event
+    let amountUnits = null;
+    let validTransfer = false;
+
+    for (const log of logs) {
+      if (
+        log.address.toLowerCase() === USDC &&
+        log.topics[0].toLowerCase() === TRANSFER_TOPIC &&
+        log.topics[1].toLowerCase().endsWith(from.slice(2)) &&
+        log.topics[2].toLowerCase().endsWith(TREASURY.slice(2))
+      ) {
+        amountUnits = parseInt(log.data, 16);
+        validTransfer = true;
+        break;
+      }
+    }
+
+    if (!validTransfer) {
+      return res.status(400).json({ ok: false, error: "No valid USDC transfer found" });
+    }
+
+    // -----------------------------
+    // Subscription lifecycle
+    // -----------------------------
+    const users = loadUsers();
+    let user = users[from] || {
+      wallet: from,
+      telegramId: null,
+      referralCredits: 0,
+      isEarlyContributor: false,
+      subscriptionExpires: null
+    };
+
+    const now = new Date();
+    const oneMonthMs = 30 * 24 * 60 * 60 * 1000;
+
+    let newExpiry;
+    if (user.subscriptionExpires) {
+      const current = new Date(user.subscriptionExpires);
+      newExpiry = current > now ? new Date(current.getTime() + oneMonthMs) : new Date(now.getTime() + oneMonthMs);
+    } else {
+      newExpiry = new Date(now.getTime() + oneMonthMs);
+    }
+
+    user.subscriptionExpires = newExpiry.toISOString();
+
+    // -----------------------------
+    // Referral crediting
+    // -----------------------------
     const data = t.input;
+    const refRaw = data.slice(74, 138);
+    let refAddress = null;
 
-    const productId = data.slice(10, 74);
-    const ref = data.slice(74, 138);
+    if (refRaw && refRaw !== "".padStart(64, "0")) {
+      const addr = "0x" + refRaw.slice(24);
+      if (addr.toLowerCase() !== from) {
+        refAddress = addr.toLowerCase();
+        let refUser = users[refAddress] || {
+          wallet: refAddress,
+          telegramId: null,
+          referralCredits: 0,
+          isEarlyContributor: false,
+          subscriptionExpires: null
+        };
+        refUser.referralCredits += 1;
+        users[refAddress] = refUser;
+      }
+    }
+
+    users[from] = user;
+    saveUsers(users);
 
     return res.json({
       ok: true,
-      productId: "0x" + productId,
-      ref: "0x" + ref,
-      from: t.from
+      from,
+      amountUnits,
+      subscriptionExpires: user.subscriptionExpires,
+      ref: refAddress
     });
+
   } catch (err) {
     console.error(err);
     return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
-// --------------------------------------------
+// -----------------------------
 // Telegram Webhook
-// --------------------------------------------
+// -----------------------------
 app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => {
-  console.log("Telegram update received:", req.body);
-
   const msg = req.body.message;
   if (!msg || !msg.text) return res.sendStatus(200);
 
   const chatId = msg.chat.id;
   const text = msg.text.trim();
 
-  const isTxHash = /^0x[a-fA-F0-9]{64}$/.test(text);
+  // -----------------------------
+  // /status command
+  // -----------------------------
+  if (text === "/status") {
+    const users = loadUsers();
+    let user = Object.values(users).find(u => u.telegramId === chatId);
 
+    if (!user) {
+      await send(chatId, "ℹ️ You don't have an active subscription yet.\n\nSubscribe here:\nhttps://baba-pay-api.onrender.com/pay?product=GROUPCHAT_EARLY");
+      return res.sendStatus(200);
+    }
+
+    const expiry = user.subscriptionExpires
+      ? new Date(user.subscriptionExpires).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+      : "No active subscription";
+
+    const referralLink = user.wallet
+      ? `https://baba-pay-api.onrender.com/pay?product=GROUPCHAT_EARLY&ref=${user.wallet}`
+      : "No wallet linked";
+
+    const early = user.isEarlyContributor ? "Yes (lifetime 50% off)" : "No";
+
+    await send(chatId,
+      `📊 *Your Subscription Status*\n\n` +
+      `🗓 *Expires:* ${expiry}\n` +
+      `💎 *Early Contributor:* ${early}\n` +
+      `🎁 *Referral Credits:* ${user.referralCredits}\n\n` +
+      `🔗 *Your Referral Link:*\n${referralLink}`,
+      true
+    );
+
+    return res.sendStatus(200);
+  }
+
+  // -----------------------------
+  // Transaction hash flow
+  // -----------------------------
+  const isTxHash = /^0x[a-fA-F0-9]{64}$/.test(text);
   if (!isTxHash) {
-    await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: "Send your Base transaction hash to unlock access."
-      })
-    });
+    await send(chatId, "Send your Base transaction hash to unlock access.");
     return res.sendStatus(200);
   }
 
   const verifyUrl = `https://baba-pay-api.onrender.com/verify?txHash=${text}`;
-
-  let result;
-  try {
-    result = await fetch(verifyUrl).then((r) => r.json());
-  } catch (err) {
-    console.error("Verify error:", err);
-    await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: "⚠️ Verification server error. Try again shortly."
-      })
-    });
-    return res.sendStatus(200);
-  }
+  let result = await fetch(verifyUrl).then(r => r.json());
 
   if (!result.ok) {
-    await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: `❌ ${result.error || "Transaction invalid"}`
-      })
-    });
+    await send(chatId, `❌ ${result.error || "Transaction invalid"}`);
     return res.sendStatus(200);
   }
 
-  await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: "✅ Transaction verified!\n\nWelcome to the group. Here is your access link:\n\n<YOUR_GROUP_LINK>"
-    })
+  // Link Telegram to wallet
+  const users = loadUsers();
+  let user = users[result.from] || {
+    wallet: result.from,
+    telegramId: chatId,
+    referralCredits: 0,
+    isEarlyContributor: false,
+    subscriptionExpires: result.subscriptionExpires
+  };
+  user.telegramId = chatId;
+  users[result.from] = user;
+  saveUsers(users);
+
+  const expiryStr = new Date(result.subscriptionExpires).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
   });
+
+  const referralLink = `https://baba-pay-api.onrender.com/pay?product=GROUPCHAT_EARLY&ref=${result.from}`;
+
+  await send(
+    chatId,
+    `🎉 *Subscription Activated!*\n\n` +
+    `Your access is active until *${expiryStr}*.\n\n` +
+    `🔗 *Group Access Link:*\nhttps://t.me/BABAANALYTIC\n\n` +
+    `💡 *Earn 50% off next month for each friend you invite!*\n` +
+    `Share your referral link:\n${referralLink}`,
+    true
+  );
 
   res.sendStatus(200);
 });
 
 // -----------------------------
+// Helper: Telegram send
+// -----------------------------
+async function send(chatId, text, markdown = false) {
+  await fetch(`https://api.telegram.org/bot${process.env.BABA_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: markdown ? "Markdown" : undefined
+    })
+  });
+}
+
+// -----------------------------
 // Start server
 // -----------------------------
-const port = process.env.PORT;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server running on port ${port}`));

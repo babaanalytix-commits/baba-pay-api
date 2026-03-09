@@ -1,1 +1,9 @@
-{}
+{
+  "0x123": {
+    "wallet": "0x123",
+    "telegramId": null,
+    "referralCredits": 0,
+    "isEarlyContributor": false,
+    "subscriptionExpires": null
+  }
+}
