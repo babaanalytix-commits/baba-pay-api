@@ -121,7 +121,7 @@ app.get("/pay", (req, res) => {
 });
 
 // --------------------------------------------
-// /checkout → Human-friendly payment page
+// /checkout → Human-friendly payment page (auto-pricing)
 // --------------------------------------------
 app.get("/checkout", async (req, res) => {
   const { product, wallet = "", ref = "" } = req.query;
@@ -130,31 +130,27 @@ app.get("/checkout", async (req, res) => {
 
   const safeWallet = String(wallet || "").trim();
 
-  const payUrl = `${req.protocol}://${req.get("host")}/pay?product=${product}${
-    safeWallet ? `&wallet=${safeWallet}` : ""
-  }${ref ? `&ref=${ref}` : ""}`;
-
-  const pay = await fetch(payUrl).then((r) => r.json());
-
   const html = `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>BABA Checkout</title>
+  <title>BABA Analytics – Group Chat Subscription</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      max-width: 420px;
+      max-width: 480px;
       margin: 40px auto;
       padding: 20px;
       color: #111;
+      line-height: 1.5;
     }
     .card {
       border: 1px solid #ddd;
       padding: 24px;
       border-radius: 14px;
       box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+      margin-top: 20px;
     }
     .price {
       font-size: 32px;
@@ -189,23 +185,66 @@ app.get("/checkout", async (req, res) => {
       font-size: 14px;
       font-weight: 500;
     }
+    ul {
+      margin-top: 10px;
+      padding-left: 20px;
+    }
   </style>
 </head>
 <body>
 
-  <h2>BABA Analytics Subscription</h2>
+  <h2>BABA Analytics – Group Chat Subscription</h2>
+  <p>
+    Access the private BABA Analytics Group Chat where Yomi shares:
+  </p>
+  <ul>
+    <li>Daily market structure insights</li>
+    <li>Real-time trade setups</li>
+    <li>Macro context and risk levels</li>
+    <li>Direct Q&A and mentorship</li>
+    <li>Community discussion with serious traders</li>
+  </ul>
 
   <div class="card">
-    <div class="price">$${pay.priceUSD} USDC</div>
-    <div class="discount">${pay.discountReason || ""}</div>
+    <div id="priceBlock">
+      <div class="price">Paste your wallet to see price</div>
+    </div>
 
     <label>Your Base Wallet</label>
     <input id="walletInput" value="${safeWallet}" placeholder="0x..." />
 
     <button onclick="payWithWallet()">Pay with Wallet</button>
+
+    <p style="font-size: 12px; color: #666; margin-top: 14px;">
+      <strong>Disclaimer:</strong> BABA Analytics provides educational market research and community discussion.
+      Nothing shared in the group constitutes financial advice, investment recommendations, or trading signals.
+      All subscription payments are final and non‑refundable.
+    </p>
   </div>
 
 <script>
+let payData = null;
+
+async function fetchPricing() {
+  const wallet = document.getElementById("walletInput").value.trim();
+  if (!wallet.startsWith("0x") || wallet.length !== 42) {
+    document.getElementById("priceBlock").innerHTML =
+      "<div class='price'>Paste your wallet to see price</div>";
+    return;
+  }
+
+  const url = "/pay?product=${product}&wallet=" + wallet + "&ref=${ref}";
+  const pay = await fetch(url).then(r => r.json());
+  payData = pay;
+
+  document.getElementById("priceBlock").innerHTML = 
+    "<div class='price'>$" + pay.priceUSD + " USDC</div>" +
+    "<div class='discount'>" + (pay.discountReason || "") + "</div>";
+}
+
+document.getElementById("walletInput").addEventListener("input", fetchPricing);
+fetchPricing();
+
 async function payWithWallet() {
   const wallet = document.getElementById("walletInput").value.trim();
   if (!wallet.startsWith("0x") || wallet.length !== 42) {
@@ -218,10 +257,15 @@ async function payWithWallet() {
     return;
   }
 
+  if (!payData) {
+    alert("Pricing not loaded yet.");
+    return;
+  }
+
   const tx = {
     from: wallet,
-    to: "${pay.to}",
-    data: "${pay.data}",
+    to: payData.to,
+    data: payData.data,
     value: "0x0"
   };
 
@@ -231,11 +275,10 @@ async function payWithWallet() {
       params: [tx]
     });
 
-    // After sending, send user to Telegram group (they'll paste tx hash there)
     window.location.href = "https://t.me/BABAANALYTIC";
   } catch (err) {
     console.error(err);
-    alert("Payment failed: " + (err && err.message ? err.message : err));
+    alert("Payment failed: " + err.message);
   }
 }
 </script>
@@ -495,6 +538,3 @@ async function sendTelegram(chatId, text, markdown = false) {
 // Start server
 // -----------------------------
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
