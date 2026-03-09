@@ -25,19 +25,32 @@ const BASE_RPC_URL =
 
 // Telegram config
 const BABA_BOT_TOKEN = process.env.BABA_BOT_TOKEN;
-const BABA_GROUP_ID = process.env.BABA_GROUP_ID || "-1001234567891";
-const GROUP_INVITE_LINK =
+
+// Group chat (interactive, auto-join)
+const GROUPCHAT_ID = process.env.BABA_GROUP_ID || "-1001234567891";
+const GROUPCHAT_INVITE =
   process.env.BABA_GROUP_INVITE || "https://t.me/+Q_rFuWD-TSE3Yzk8";
+
+// BMI channel (broadcast, invite-link only)
+const BMI_CHANNEL_ID = process.env.BMI_CHANNEL_ID || "-1003760311302";
+const BMI_CHANNEL_INVITE =
+  process.env.BMI_CHANNEL_INVITE || "https://t.me/+UcwflfIClUAwMzQ8";
 
 // Product config
 const PRODUCTS = {
   GROUPCHAT_EARLY: {
     id: "GROUPCHAT_EARLY",
     name: "BABA Analytics – Group Chat Subscription",
-    // 12.49 USDC (already early-bird discounted)
     priceUsdc: 12.49,
-    // 30 days access
-    durationDays: 30
+    durationDays: 30,
+    type: "groupchat"
+  },
+  BMI: {
+    id: "BMI",
+    name: "BABA Analytics – BMI Report Subscription",
+    priceUsdc: 29.0,
+    durationDays: 30,
+    type: "bmi"
   }
 };
 
@@ -93,11 +106,11 @@ async function sendTelegram(chatId, text, markdown = false) {
 }
 
 async function autoJoinGroup(telegramId) {
-  if (!BABA_BOT_TOKEN || !BABA_GROUP_ID) return;
+  if (!BABA_BOT_TOKEN || !GROUPCHAT_ID) return;
 
   const url = `https://api.telegram.org/bot${BABA_BOT_TOKEN}/addChatMember`;
   const body = {
-    chat_id: BABA_GROUP_ID,
+    chat_id: GROUPCHAT_ID,
     user_id: telegramId
   };
 
@@ -143,13 +156,33 @@ function normalizeAddress(addr) {
   return addr.toLowerCase();
 }
 
-// Verify a USDC payment transaction
-async function verifyPaymentTx(txHash, expectedProductId) {
-  const product = PRODUCTS[expectedProductId];
-  if (!product) throw new Error("Unknown product");
+// Infer product by amount (since user just sends tx hash)
+function inferProductByAmount(amount) {
+  // amount is BigInt in USDC base units (6 decimals)
+  let best = null;
+  let bestDiff = null;
 
-  const minAmount = usdcToBaseUnits(product.priceUsdc);
+  for (const productId of Object.keys(PRODUCTS)) {
+    const p = PRODUCTS[productId];
+    const target = usdcToBaseUnits(p.priceUsdc);
+    const diff = amount > target ? amount - target : target - amount;
+    if (bestDiff === null || diff < bestDiff) {
+      bestDiff = diff;
+      best = productId;
+    }
+  }
 
+  // Optional: enforce a max tolerance (e.g. 0.01 USDC)
+  const maxTolerance = usdcToBaseUnits(0.01);
+  if (bestDiff !== null && bestDiff <= maxTolerance) {
+    return best;
+  }
+
+  return null;
+}
+
+// Verify a USDC payment transaction and infer product
+async function verifyPaymentTx(txHash) {
   const tx = await rpcCall("eth_getTransactionByHash", [txHash]);
   if (!tx) throw new Error("Transaction not found");
 
@@ -175,7 +208,7 @@ async function verifyPaymentTx(txHash, expectedProductId) {
     const to = "0x" + log.topics[2].slice(26);
     const value = hexToBigInt(log.data);
 
-    if (normalizeAddress(to) === TREASURY_ADDRESS && value >= minAmount) {
+    if (normalizeAddress(to) === TREASURY_ADDRESS) {
       payer = normalizeAddress(from);
       amount = value;
       break;
@@ -183,13 +216,18 @@ async function verifyPaymentTx(txHash, expectedProductId) {
   }
 
   if (!payer || !amount) {
-    throw new Error("No valid USDC transfer to treasury found");
+    throw new Error("No USDC transfer to treasury found");
+  }
+
+  const productId = inferProductByAmount(amount);
+  if (!productId) {
+    throw new Error("Payment amount does not match any product");
   }
 
   return {
     from: payer,
     amount,
-    productId: expectedProductId
+    productId
   };
 }
 
@@ -243,7 +281,7 @@ app.get("/checkout", (req, res) => {
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>BABA Analytics – Group Chat Subscription</title>
+  <title>${product.name}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
@@ -362,21 +400,35 @@ app.get("/checkout", (req, res) => {
 </head>
 <body>
   <div class="card">
-    <h1>BABA Analytics – Group Chat Subscription</h1>
+    <h1>${product.name}</h1>
     <div class="subtitle">
-      Access the private BABA Analytics Group Chat where members share:
+      ${
+        product.id === "GROUPCHAT_EARLY"
+          ? "Access the private BABA Analytics Group Chat where members share:"
+          : "Access the BABA Analytics BMI Report subscription:"
+      }
     </div>
-    <ul>
+    ${
+      product.id === "GROUPCHAT_EARLY"
+        ? `<ul>
       <li>Daily market structure insights</li>
       <li>Real-time trade setups</li>
       <li>Macro context and risk levels</li>
       <li>Direct Q&A and mentorship</li>
       <li>Community discussion with serious traders</li>
-    </ul>
+    </ul>`
+        : `<ul>
+      <li>Regular BMI report releases</li>
+      <li>Structured market context</li>
+      <li>Key levels and risk framing</li>
+      <li>Actionable educational insights</li>
+    </ul>`
+    }
 
     <div class="price-row">
-      <div class="price"><span id="priceText">$${product.priceUsdc.toFixed(2)}</span> USDC</div>
-      <div class="discount">Early bird discount (50%)</div>
+      <div class="price"><span id="priceText">$${product.priceUsdc.toFixed(
+        2
+      )}</span> USDC</div>
     </div>
 
     <div class="label">Your Base Wallet</div>
@@ -398,7 +450,7 @@ app.get("/checkout", (req, res) => {
 
     <div class="disclaimer">
       Disclaimer: BABA Analytics provides educational market research and community discussion.
-      Nothing shared in the group constitutes financial advice, investment recommendations, or trading signals.
+      Nothing shared constitutes financial advice, investment recommendations, or trading signals.
       All subscription payments are final and non‑refundable.
     </div>
   </div>
@@ -456,8 +508,8 @@ app.get("/checkout", (req, res) => {
           params: [tx]
         });
 
-        // Redirect to Telegram group (fallback; bot will verify tx)
-        window.location.href = ${JSON.stringify(GROUP_INVITE_LINK)};
+        // Redirect to Telegram (user will send tx hash to bot)
+        window.location.href = "https://t.me/BABAANALYTIC";
       } catch (err) {
         console.error(err);
         alert("Payment failed: " + (err && err.message ? err.message : String(err)));
@@ -503,6 +555,29 @@ app.get("/pricing", (req, res) => {
 
 // ---------- TELEGRAM WEBHOOK ----------
 
+const RULES_TEXT =
+  "Welcome to the BABA Analytics Group Chat.\n\n" +
+  "This space is for serious traders who value structure, clarity, and respectful discussion.\n" +
+  "We keep the environment high-signal so everyone can learn and grow.\n\n" +
+  "🌱 Community Guidelines\n" +
+  "• Be constructive and respectful\n" +
+  "• No harassment or personal attacks\n" +
+  "• No inappropriate or explicit content\n" +
+  "• No spam or self-promotion\n" +
+  "• Keep discussions focused on markets, structure, and learning\n" +
+  "• Protect your privacy — share only what you’re comfortable with\n\n" +
+  "🧭 What this group is for\n" +
+  "• Market structure discussion\n" +
+  "• Trade context and reasoning\n" +
+  "• Questions, insights, and shared learning\n" +
+  "• Clean, focused conversation\n\n" +
+  "🚫 What this group is not for\n" +
+  "• Signals or copy-trading\n" +
+  "• Hype, noise, or emotional swings\n" +
+  "• Off-topic chatter\n" +
+  "• Financial advice\n\n" +
+  "Thanks for being here — let’s keep this space sharp, respectful, and useful for everyone.";
+
 app.post("/telegram/webhook/:token", async (req, res) => {
   try {
     if (!BABA_BOT_TOKEN || req.params.token !== BABA_BOT_TOKEN) {
@@ -520,27 +595,62 @@ app.post("/telegram/webhook/:token", async (req, res) => {
     if (text.startsWith("/start")) {
       await sendTelegram(
         chatId,
-        "👋 Welcome to BABA Analytics.\n\n" +
-          "To join the private group:\n" +
-          "1. Pay your subscription in USDC on Base:\n" +
-          "   https://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY\n\n" +
-          "2. After paying, send me your transaction hash (0x...).\n\n" +
-          "I'll verify it on-chain and activate your access.",
-        false
+        "👋 *Welcome to BABA Analytics.*\n\n" +
+          "You’re in the right place if you want structured market context, clean levels, and a community of serious traders who care about doing things properly.\n\n" +
+          "Here’s what you can subscribe to:\n\n" +
+          "💬 *Group Chat*\n" +
+          "Daily structure, real-time setups, macro context, Q&A, and a focused community of traders.\n" +
+          "Subscribe:\n" +
+          "https://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY\n\n" +
+          "📊 *BMI Report*\n" +
+          "A structured, narrative-driven market report that frames risk, context, and actionable insights.\n" +
+          "Subscribe:\n" +
+          "https://baba-pay-api.onrender.com/checkout?product=BMI\n\n" +
+          "After paying, send me your transaction hash (0x...) and I’ll verify it on-chain.\n\n" +
+          "🌱 *Community Guidelines*\n" +
+          "We keep things clean, respectful, and focused:\n" +
+          "• Be constructive and respectful\n" +
+          "• No harassment or personal attacks\n" +
+          "• No inappropriate or explicit content\n" +
+          "• No spam or self-promotion\n" +
+          "• Keep discussions centered on markets and learning\n" +
+          "• Protect your privacy — share only what you’re comfortable with",
+        true
       );
       return res.sendStatus(200);
     }
 
-    // /status
+    // /start_bmi (optional shortcut)
+    if (text.startsWith("/start_bmi")) {
+      await sendTelegram(
+        chatId,
+        "📊 *BMI Subscription*\n\n" +
+          "The BMI channel is a read-only feed where you’ll receive structured BMI reports, market context, and narrative updates.\n\n" +
+          "Subscribe here:\n" +
+          "https://baba-pay-api.onrender.com/checkout?product=BMI\n\n" +
+          "After paying, send me your transaction hash (0x...) and I’ll verify it on-chain.",
+        true
+      );
+      return res.sendStatus(200);
+    }
+
+    // /rules
+    if (text.startsWith("/rules")) {
+      await sendTelegram(chatId, RULES_TEXT, false);
+      return res.sendStatus(200);
+    }
+
+    // /status (group chat)
     if (text.startsWith("/status")) {
       const user = findUserByTelegramId(chatId);
       if (!user || !user.subscriptions || !user.subscriptions.GROUPCHAT_EARLY) {
         await sendTelegram(
           chatId,
-          "ℹ️ You don't have an active subscription yet.\n\n" +
-            "Subscribe here:\n" +
+          "🔎 *Subscription Status*\n\n" +
+            "You don't have an active Group Chat subscription yet.\n\n" +
+            "You can subscribe here:\n" +
             "https://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY",
-          false
+          true
         );
         return res.sendStatus(200);
       }
@@ -551,11 +661,46 @@ app.post("/telegram/webhook/:token", async (req, res) => {
 
       await sendTelegram(
         chatId,
-        `✅ *Subscription Active*\n\n` +
-          `Active until *${expiryStr}*.\n\n` +
-          `🔗 *Group Access Link:*\n${GROUP_INVITE_LINK}\n\n` +
-          `💡 *Earn 50% off next month for each friend you invite!*\n` +
-          `Share your referral link:\n${referralLink}`,
+        "🔎 *Subscription Status*\n\n" +
+          `Your Group Chat access is active until *${expiryStr}*.\n\n` +
+          "🔗 *Group Access Link:*\n" +
+          `${GROUPCHAT_INVITE}\n\n` +
+          "🌱 Remember: keep the space respectful, constructive, and focused on markets and learning.\n\n" +
+          "If you’d like to invite others, share this link:\n" +
+          referralLink,
+        true
+      );
+      return res.sendStatus(200);
+    }
+
+    // /status_bmi
+    if (text.startsWith("/status_bmi")) {
+      const user = findUserByTelegramId(chatId);
+      if (!user || !user.subscriptions || !user.subscriptions.BMI) {
+        await sendTelegram(
+          chatId,
+          "🔎 *BMI Subscription Status*\n\n" +
+            "You don't have an active BMI subscription.\n\n" +
+            "You can subscribe here:\n" +
+            "https://baba-pay-api.onrender.com/checkout?product=BMI",
+          true
+        );
+        return res.sendStatus(200);
+      }
+
+      const sub = user.subscriptions.BMI;
+      const expiryStr = new Date(sub.expiresAt).toUTCString();
+      const referralLink = `https://baba-pay-api.onrender.com/checkout?product=BMI&ref=${user.wallet}`;
+
+      await sendTelegram(
+        chatId,
+        "🔎 *BMI Subscription Status*\n\n" +
+          `Your BMI access is active until *${expiryStr}*.\n\n` +
+          "📡 *BMI Channel Link:*\n" +
+          `${BMI_CHANNEL_INVITE}\n\n` +
+          "This is a read-only channel where you’ll receive structured BMI reports and market context.\n\n" +
+          "If you’d like to invite others, share this link:\n" +
+          referralLink,
         true
       );
       return res.sendStatus(200);
@@ -566,8 +711,14 @@ app.post("/telegram/webhook/:token", async (req, res) => {
       const txHash = text;
 
       try {
-        const result = await verifyPaymentTx(txHash, "GROUPCHAT_EARLY");
+        const result = await verifyPaymentTx(txHash);
         const wallet = result.from;
+        const productId = result.productId;
+        const product = PRODUCTS[productId];
+
+        if (!product) {
+          throw new Error("Unknown product from payment");
+        }
 
         // Link wallet ↔ Telegram
         const nowUser = users[wallet] || {
@@ -578,23 +729,56 @@ app.post("/telegram/webhook/:token", async (req, res) => {
         nowUser.telegramId = chatId;
         users[wallet] = nowUser;
 
-        const newExpiry = extendSubscription(wallet, "GROUPCHAT_EARLY");
+        const newExpiry = extendSubscription(wallet, productId);
         const expiryStr = new Date(newExpiry).toUTCString();
 
-        // Auto-join group
-        await autoJoinGroup(chatId);
+        if (product.type === "groupchat") {
+          // Auto-join group chat
+          await autoJoinGroup(chatId);
 
-        const referralLink = `https://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY&ref=${wallet}`;
+          const referralLink = `https://baba-pay-api.onrender.com/checkout?product=GROUPCHAT_EARLY&ref=${wallet}`;
 
-        await sendTelegram(
-          chatId,
-          `🎉 *Subscription Activated!*\n\n` +
-            `Your access is active until *${expiryStr}*.\n\n` +
-            `🔗 *Group Access Link:*\n${GROUP_INVITE_LINK}\n\n` +
-            `💡 *Earn 50% off next month for each friend you invite!*\n` +
-            `Share your referral link:\n${referralLink}`,
-          true
-        );
+          await sendTelegram(
+            chatId,
+            "🎉 *Subscription Activated*\n\n" +
+              `Your Group Chat access is now active until *${expiryStr}*.\n\n` +
+              "🔗 *Group Access Link:*\n" +
+              `${GROUPCHAT_INVITE}\n\n` +
+              "🌱 *Community Guidelines*\n" +
+              "We keep the environment high-signal and respectful:\n" +
+              "• Be constructive and respectful\n" +
+              "• No harassment or personal attacks\n" +
+              "• No inappropriate or explicit content\n" +
+              "• No spam or self-promotion\n" +
+              "• Keep discussions centered on markets and learning\n" +
+              "• Protect your privacy — share only what you’re comfortable with\n\n" +
+              "Welcome — see you inside.\n\n" +
+              "If you’d like to invite others, share this link:\n" +
+              referralLink,
+            true
+          );
+        } else if (product.type === "bmi") {
+          const referralLink = `https://baba-pay-api.onrender.com/checkout?product=BMI&ref=${wallet}`;
+
+          await sendTelegram(
+            chatId,
+            "📊 *BMI Subscription Activated*\n\n" +
+              `Your BMI access is now active until *${expiryStr}*.\n\n` +
+              "📡 *BMI Channel Link:*\n" +
+              `${BMI_CHANNEL_INVITE}\n\n` +
+              "This is a read-only channel where you’ll receive structured BMI reports, market context, and narrative updates.\n\n" +
+              "All discussion happens in the Group Chat. You can subscribe to the Group Chat anytime if you’d like to join the conversation.\n\n" +
+              "If you’d like to invite others, share this link:\n" +
+              referralLink,
+            true
+          );
+        } else {
+          await sendTelegram(
+            chatId,
+            `✅ Subscription activated for *${product.name}* until *${expiryStr}*.`,
+            true
+          );
+        }
       } catch (err) {
         console.error("Verification error:", err);
         await sendTelegram(
@@ -604,7 +788,7 @@ app.post("/telegram/webhook/:token", async (req, res) => {
             "- You paid in USDC on Base\n" +
             "- You sent the correct transaction hash\n" +
             "- The payment was sent to the correct treasury address\n\n" +
-            "If you believe this is an error, send the hash again.",
+            "If you believe this is an error, you can send the hash again.",
           false
         );
       }
@@ -615,7 +799,7 @@ app.post("/telegram/webhook/:token", async (req, res) => {
     // Fallback
     await sendTelegram(
       chatId,
-      "Send /start to see how to subscribe, or send me a transaction hash (0x...) to verify your payment.",
+      "Send /start to see available subscriptions, /rules to read the group guidelines, or send me a transaction hash (0x...) to verify your payment.",
       false
     );
     res.sendStatus(200);
