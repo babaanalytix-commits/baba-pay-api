@@ -1,5 +1,5 @@
 // server.cjs
-// BABA Analytics — Professional Trader Edition
+// BABA Analytics — Professional Trader Edition (Updated Pricing + Payment Address)
 
 require("dotenv").config();
 const express = require("express");
@@ -14,24 +14,42 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 3000;
 
-// On-chain config
-const TREASURY_ADDRESS = (process.env.TREASURY_ADDRESS || "0x0108b8849C83f725EA434C835068c66e5A568482").toLowerCase();
-const USDC_CONTRACT = (process.env.USDC_CONTRACT || "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").toLowerCase();
+// ============================================================================
+// PAYMENT ADDRESS (UPDATED)
+// ============================================================================
+const PAYMENT_ADDRESS = "0x2AFE5FFe043C1c45843076E65BF93517d37d1Ed7".toLowerCase();
+
+// ============================================================================
+// ON-CHAIN CONFIG
+// ============================================================================
+const USDC_CONTRACT = (process.env.USDC_CONTRACT || "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913").toLowerCase();
 const BASE_RPC_URL = process.env.BASE_RPC_URL || "https://mainnet.base.org";
 
-// Telegram config
+// ============================================================================
+// TELEGRAM CONFIG
+// ============================================================================
 const BABA_BOT_TOKEN = process.env.BABA_BOT_TOKEN;
 const GROUPCHAT_ID = process.env.BABA_GROUP_ID || "-1001234567891";
 const GROUPCHAT_INVITE = process.env.BABA_GROUP_INVITE || "https://t.me/+Q_rFuWD-TSE3Yzk8";
 const BMI_CHANNEL_ID = process.env.BMI_CHANNEL_ID || "-1003760311302";
 const BMI_CHANNEL_INVITE = process.env.BMI_CHANNEL_INVITE || "https://t.me/+UcwflfIClUAwMzQ8";
 
-// Products
+// ============================================================================
+// PRODUCT CONFIG (UPDATED PRICING)
+// Full price: 24.99
+// Discounted price: 12.49 until March 14
+// ============================================================================
+const DISCOUNT_PRICE = 12.49;
+const FULL_PRICE = 24.99;
+const DISCOUNT_END = "2025-03-14";
+
 const PRODUCTS = {
   GROUPCHAT_EARLY: {
     id: "GROUPCHAT_EARLY",
     name: "BABA Analytics — Educational Group Chat",
-    priceUsdc: 12.49,
+    priceUsdc: DISCOUNT_PRICE,
+    fullPriceUsdc: FULL_PRICE,
+    discountEnds: DISCOUNT_END,
     durationDays: 30,
     type: "groupchat",
     features: [
@@ -43,10 +61,13 @@ const PRODUCTS = {
       "Community knowledge‑sharing"
     ]
   },
+
   BMI: {
     id: "BMI",
     name: "BABA Analytics — BMI Research Channel",
-    priceUsdc: 29.0,
+    priceUsdc: DISCOUNT_PRICE,
+    fullPriceUsdc: FULL_PRICE,
+    discountEnds: DISCOUNT_END,
     durationDays: 30,
     type: "bmi",
     features: [
@@ -59,7 +80,9 @@ const PRODUCTS = {
   }
 };
 
-// User store
+// ============================================================================
+// USER STORE
+// ============================================================================
 const USERS_FILE = path.join(__dirname, "users.json");
 
 function loadUsers() {
@@ -76,7 +99,9 @@ function saveUsers(users) {
 
 let users = loadUsers();
 
-// Helpers
+// ============================================================================
+// HELPERS
+// ============================================================================
 function usdcToBaseUnits(amount) {
   return BigInt(Math.round(amount * 1_000_000));
 }
@@ -169,7 +194,9 @@ function extendSubscription(wallet, productId) {
 function findUserByTelegramId(id) {
   return Object.values(users).find(u => u.telegramId === id) || null;
 }
-// Pricing route
+// ============================================================================
+// PRICING ROUTE (UPDATED PRICING + PAYMENT ADDRESS)
+// ============================================================================
 app.get("/pricing", (req, res) => {
   const productId = req.query.product;
   const product = PRODUCTS[productId];
@@ -177,17 +204,22 @@ app.get("/pricing", (req, res) => {
   if (!product) return res.status(400).json({ error: "Unknown product" });
 
   const amount = usdcToBaseUnits(product.priceUsdc);
-  const data = encodeErc20Transfer(TREASURY_ADDRESS, amount);
+  const data = encodeErc20Transfer(PAYMENT_ADDRESS, amount);
 
   res.json({
     productId,
     priceUsdc: product.priceUsdc,
+    fullPriceUsdc: product.fullPriceUsdc,
+    discountEnds: product.discountEnds,
     to: USDC_CONTRACT,
+    paymentAddress: PAYMENT_ADDRESS,
     data
   });
 });
 
-// Premium Professional Trader checkout
+// ============================================================================
+// PREMIUM CHECKOUT PAGE (UPDATED PRICING + PAYMENT ADDRESS + DISCOUNT)
+// ============================================================================
 app.get("/checkout", (req, res) => {
   const productId = req.query.product || "GROUPCHAT_EARLY";
   const product = PRODUCTS[productId];
@@ -240,11 +272,23 @@ app.get("/checkout", (req, res) => {
     color: #D1D5DB;
     font-size: 0.85rem;
   }
-  .price {
+  .price-box {
+    margin-bottom: 16px;
+  }
+  .full-price {
+    text-decoration: line-through;
+    color: #6B7280;
+    font-size: 0.9rem;
+  }
+  .discount-price {
     font-size: 1.6rem;
     font-weight: 600;
-    margin-bottom: 16px;
     color: #16A34A;
+  }
+  .discount-note {
+    font-size: 0.75rem;
+    color: #9CA3AF;
+    margin-top: 4px;
   }
   .label {
     font-size: 0.8rem;
@@ -302,10 +346,14 @@ app.get("/checkout", (req, res) => {
 
     <ul>${featureList}</ul>
 
-    <div class="price">$${product.priceUsdc.toFixed(2)} USDC</div>
+    <div class="price-box">
+      <div class="full-price">${product.fullPriceUsdc.toFixed(2)} USDC</div>
+      <div class="discount-price">${product.priceUsdc.toFixed(2)} USDC</div>
+      <div class="discount-note">50% off until March 14</div>
+    </div>
 
-    <div class="label">Treasury Address</div>
-    <div class="wallet-box">${TREASURY_ADDRESS}</div>
+    <div class="label">Payment Address</div>
+    <div class="wallet-box">${PAYMENT_ADDRESS}</div>
 
     <input id="walletInput" class="input" placeholder="Your Base wallet (0x...)" />
 
@@ -378,12 +426,17 @@ app.get("/checkout", (req, res) => {
 
   res.send(html);
 });
-// Verify payment
+// ============================================================================
+// VERIFY PAYMENT (UPDATED FOR NEW PAYMENT ADDRESS + PRICING)
+// ============================================================================
 app.post("/verify", async (req, res) => {
   try {
     const { txHash, telegramId } = req.body;
-    if (!txHash || !telegramId) return res.status(400).json({ error: "Missing fields" });
+    if (!txHash || !telegramId) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
 
+    // Fetch transaction + receipt
     const tx = await rpcCall("eth_getTransactionByHash", [txHash]);
     const receipt = await rpcCall("eth_getTransactionReceipt", [txHash]);
 
@@ -391,10 +444,12 @@ app.post("/verify", async (req, res) => {
       return res.status(400).json({ error: "Transaction failed" });
     }
 
+    // Must be a USDC transfer
     if (!tx.to || normalizeAddress(tx.to) !== USDC_CONTRACT) {
       return res.status(400).json({ error: "Not a USDC transfer" });
     }
 
+    // Parse logs to find transfer to PAYMENT_ADDRESS
     let payer = null;
     let amount = null;
 
@@ -407,7 +462,7 @@ app.post("/verify", async (req, res) => {
       const to = "0x" + log.topics[2].slice(26);
       const value = hexToBigInt(log.data);
 
-      if (normalizeAddress(to) === TREASURY_ADDRESS) {
+      if (normalizeAddress(to) === PAYMENT_ADDRESS) {
         payer = normalizeAddress(from);
         amount = value;
         break;
@@ -415,20 +470,24 @@ app.post("/verify", async (req, res) => {
     }
 
     if (!payer || !amount) {
-      return res.status(400).json({ error: "No USDC transfer to treasury" });
+      return res.status(400).json({ error: "No USDC transfer to payment address" });
     }
 
+    // Infer product by amount (12.49 USDC)
     const productId = inferProductByAmount(amount);
     if (!productId) {
       return res.status(400).json({ error: "Amount does not match any product" });
     }
 
+    // Extend subscription
     const expiry = extendSubscription(payer, productId);
 
+    // Attach Telegram ID
     const user = users[payer];
     user.telegramId = telegramId;
     saveUsers(users);
 
+    // Deliver access
     if (productId === "GROUPCHAT_EARLY") {
       await autoJoinGroup(telegramId);
       await sendTelegram(
@@ -438,21 +497,26 @@ app.post("/verify", async (req, res) => {
     } else {
       await sendTelegram(
         telegramId,
-        `Access granted.\n\nBMI Channel: ${BMI_CHANNEL_INVITE}`
+        `Access granted.\n\nBMI Research Channel: ${BMI_CHANNEL_INVITE}`
       );
     }
 
     res.json({ success: true, productId, expiresAt: expiry });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Verification failed" });
   }
 });
 
-// Link wallet to Telegram
+// ============================================================================
+// LINK WALLET TO TELEGRAM
+// ============================================================================
 app.post("/link_wallet", (req, res) => {
   const { wallet, telegramId } = req.body;
-  if (!wallet || !telegramId) return res.status(400).json({ error: "Missing fields" });
+  if (!wallet || !telegramId) {
+    return res.status(400).json({ error: "Missing fields" });
+  }
 
   const w = wallet.toLowerCase();
   const user = users[w] || { wallet: w, telegramId: null, subscriptions: {} };
@@ -463,7 +527,9 @@ app.post("/link_wallet", (req, res) => {
   res.json({ success: true });
 });
 
-// Status — group chat
+// ============================================================================
+// STATUS — GROUP CHAT
+// ============================================================================
 app.get("/status", (req, res) => {
   const wallet = req.query.wallet?.toLowerCase();
   if (!wallet) return res.status(400).json({ error: "Missing wallet" });
@@ -474,10 +540,15 @@ app.get("/status", (req, res) => {
   const sub = user.subscriptions["GROUPCHAT_EARLY"];
   if (!sub) return res.json({ active: false });
 
-  res.json({ active: sub.expiresAt > Date.now(), expiresAt: sub.expiresAt });
+  res.json({
+    active: sub.expiresAt > Date.now(),
+    expiresAt: sub.expiresAt
+  });
 });
 
-// Status — BMI
+// ============================================================================
+// STATUS — BMI CHANNEL
+// ============================================================================
 app.get("/status_bmi", (req, res) => {
   const wallet = req.query.wallet?.toLowerCase();
   if (!wallet) return res.status(400).json({ error: "Missing wallet" });
@@ -488,9 +559,14 @@ app.get("/status_bmi", (req, res) => {
   const sub = user.subscriptions["BMI"];
   if (!sub) return res.json({ active: false });
 
-  res.json({ active: sub.expiresAt > Date.now(), expiresAt: sub.expiresAt });
+  res.json({
+    active: sub.expiresAt > Date.now(),
+    expiresAt: sub.expiresAt
+  });
 });
-// Telegram webhook (basic)
+// ============================================================================
+// TELEGRAM WEBHOOK (LIGHTWEIGHT + SAFE)
+// ============================================================================
 app.post("/telegram/webhook", async (req, res) => {
   try {
     const update = req.body;
@@ -499,21 +575,27 @@ app.post("/telegram/webhook", async (req, res) => {
     const chatId = update.message.chat.id;
     const text = (update.message.text || "").trim();
 
+    // Basic onboarding
     if (text === "/start") {
       await sendTelegram(
         chatId,
-        "Welcome to BABA Analytics.\n\nThis bot helps you verify your subscription after paying in USDC on Base.\n\nSend your transaction hash after payment."
+        "Welcome to BABA Analytics.\n\n" +
+        "This bot helps you verify your subscription after paying in USDC on Base.\n\n" +
+        "After completing payment, send your transaction hash here."
       );
     }
 
     res.sendStatus(200);
   } catch (err) {
-    console.error(err);
+    console.error("Telegram webhook error:", err);
     res.sendStatus(200);
   }
 });
 
-// Start server
+// ============================================================================
+// START SERVER
+// ============================================================================
 app.listen(PORT, () => {
   console.log(`BABA Analytics server running on port ${PORT}`);
 });
+
