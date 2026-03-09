@@ -280,7 +280,7 @@ async function payWithWallet() {
       params: [tx]
     });
 
-    window.location.href = "https://t.me/BABAANALYTIC";
+    window.location.href = "https://t.me/+aqMTsDwFkHwzNjZk";
   } catch (err) {
     console.error(err);
     alert("Payment failed: " + err.message);
@@ -516,7 +516,7 @@ app.post(`/telegram/webhook/${process.env.BABA_BOT_TOKEN}`, async (req, res) => 
     chatId,
     `🎉 *Subscription Activated!*\n\n` +
       `Your access is active until *${expiryStr}*.\n\n` +
-      `🔗 *Group Access Link:*\nhttps://t.me/BABAANALYTIC\n\n` +
+      `🔗 *Group Access Link:*\nhttps://t.me/+aqMTsDwFkHwzNjZk\n\n` +
       `💡 *Earn 50% off next month for each friend you invite!*\n` +
       `Share your referral link:\n${referralLink}`,
     true
