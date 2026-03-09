@@ -53,17 +53,20 @@ app.get("/verify", async (req, res) => {
 
     const t = tx.result;
 
+    // Validate chain
     if (t.chainId !== "0x2105") {
       return res.status(400).json({ ok: false, error: "Wrong chain" });
     }
 
+    // Validate recipient
     if (
       t.to.toLowerCase() !==
-      "0x2afe5ffe043c1c45843076e65bf93517d37d1ed7".toLowerCase()
+      "0x2afe5ffe043c1c45843076e65bf93517d37d1ed7"
     ) {
       return res.status(400).json({ ok: false, error: "Wrong recipient" });
     }
 
+    // Decode calldata
     const data = t.input;
 
     const productId = data.slice(10, 74);
